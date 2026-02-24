@@ -1,0 +1,79 @@
+import random
+class gameTree():
+    def __init__(self,state):
+        self.state = state
+        self.children =[]
+
+class gameState():
+    def __init__(self, number, score_p1 = 0, score_p2 = 0, whose_turn = 0):# whose_turn: 0 - p1; 1 - p2
+        self.number = number
+        self.score_p1 = score_p1
+        self.score_p2 = score_p2
+        self.whose_turn = whose_turn
+
+
+
+
+    def checkIfGameOver(self):
+        if self.number <= 10:
+            return True
+        else:
+            return False
+        
+    def getMoves(self):
+        legalMoves =[]
+        if self.number % 2 == 0:
+            legalMoves.append(2)
+        if self.number % 3 ==0:
+            legalMoves.append(3)
+        return legalMoves
+
+
+def doGameMove(self, move): ## move_choice - 2 vai 3 
+    op, val = move
+
+    new_number = self.number / move
+    if self.whose_turn == 0:# player_1
+        whose_turn = 1 # nomaina kam gājiens, jādomā, kā ģenerēšana ietekmē spēlēšanu
+        if move == 2:
+            new_score_p2 = self.score_p2 + 2 #pretiniekam pieskaita 2p
+        elif move == 3:
+            new_score_p1 = self.score_p1 + 3 #sev pieskaita 3p
+    elif self.whose_turn == 1: # player_2
+        whose_turn = 0 # nomaina kam gājiens
+        if move == 2:
+            new_score_p2 = self.score_p1 + 2 #pretiniekam pieskaita 2p
+        elif move == 3:
+            new_score_p2 = self.score_p2 + 3 #sev pieskaita 3p
+    
+    
+    
+
+def generateStartNumbers():
+    starting_number_list = []
+    while True:
+        random_number = random.randint(10000, 20000)
+        ##print(random_number)
+        if random_number % 2 == 0 and random_number % 3 == 0:
+            starting_number_list.append(random_number)
+        if len(starting_number_list) == 5:
+            break
+    print("Start number list: ", starting_number_list)
+
+    return(starting_number_list)
+
+def gameTreeGen(node, depth):
+    if depth ==0 or node.state.checkIfGameOver():
+        return
+    moves = node.state.getMoves()
+    for move in moves:
+        new_state = node.state.doGameMove(move)
+        child = gameState(new_state)
+        node.childer.append(child)
+
+        gameTreeGen(child, depth -1)
+
+generateStartNumbers() 
+beginning_state = gameState(10368, 0, 0, 1)## passot jau atlasītu 1 of 5 skaitli
+root = gameTree(beginning_state)
+

@@ -1,0 +1,651 @@
+import random
+import time
+import math
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple, Callable
+
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+HUMAN = 0
+AI = 1
+
+@dataclass(frozen=True)
+class Move:
+    divisor: int  # 2 or 3
+
+@dataclass(frozen=True)
+class GameState:
+    n: int
+    score_human: int
+    score_ai: int
+    player_to_move: int  # HUMAN or AI
+
+    def legal_moves(self) -> List[Move]:
+        moves = []
+        if self.n % 2 == 0:
+            moves.append(Move(2))
+        if self.n % 3 == 0:
+            moves.append(Move(3))
+        return moves
+
+    def is_terminal(self) -> bool:
+        return self.score_human >= 10 or self.score_ai >= 10
+    
+    def can_move(self) -> bool:
+        """Check if current player has any legal moves."""
+        return len(self.legal_moves()) > 0
+
+    def apply(self, move: Move) -> "GameState":
+        d = move.divisor
+        if d not in (2, 3):
+            raise ValueError("Invalid move divisor")
+        if self.n % d != 0:
+            raise ValueError("Illegal move (non-integer division)")
+
+        new_n = self.n // d
+        sh, sa = self.score_human, self.score_ai
+
+        # Scoring rules:
+        # divide by 2 -> opponent gets +2
+        # divide by 3 -> current player gets +3
+        if d == 2:
+            if self.player_to_move == HUMAN:
+                sa += 2
+            else:
+                sh += 2
+        else:  # d == 3
+            if self.player_to_move == HUMAN:
+                sh += 3
+            else:
+                sa += 3
+
+        next_player = AI if self.player_to_move == HUMAN else HUMAN
+        return GameState(new_n, sh, sa, next_player)
+
+    def winner(self) -> Optional[int]:
+        """Return HUMAN / AI / None for draw, only valid when terminal."""
+        if not self.is_terminal():
+            return None
+        if self.score_human == self.score_ai:
+            return None
+        return HUMAN if self.score_human > self.score_ai else AI
+
+
+# -----------------------------
+# Game tree node (required by assignment)
+# -----------------------------
+
+@dataclass
+class Node:
+    state: GameState
+    move_from_parent: Optional[Move] = None
+    parent: Optional["Node"] = None
+    depth: int = 0
+    value: Optional[float] = None
+    children: List["Node"] = field(default_factory=list)
+
+
+@dataclass
+class SearchStats:
+    generated_nodes: int = 0
+    evaluated_nodes: int = 0
+
+
+# -----------------------------
+# Heuristic evaluation
+# -----------------------------
+
+def heuristic(state: GameState) -> float:
+    """
+    Evaluation from AI perspective: higher is better for AI.
+    Depth-limited search needs heuristic for non-terminal nodes.
+
+    Simple, explainable heuristic:
+    - base: score difference (AI - human)
+    - plus small term based on size of n (bigger n => more future moves possible)
+    - plus mobility (number of legal moves for side to move) as a tiny tie-breaker
+    """
+    score_diff = state.score_ai - state.score_human
+
+    # Estimate remaining "room": if n is large, more moves remain.
+    # Use log so it doesn't dominate.
+    room = 0.0 if state.n <= 10 else math.log(state.n / 10.0)
+
+    # Mobility: prefer states where current mover has options
+    mobility = len(state.legal_moves())
+
+    # If it's AI to move, mobility is good; if human to move, mobility is slightly bad for AI
+    mobility_term = 0.2 * mobility * (1 if state.player_to_move == AI else -1)
+
+    return score_diff + 0.3 * room + mobility_term
+
+
+def terminal_utility(state: GameState) -> float:
+    """Hard utility for terminal positions, from AI perspective."""
+    if state.score_ai > state.score_human:
+        return 1_000_000.0 + (state.score_ai - state.score_human)
+    if state.score_ai < state.score_human:
+        return -1_000_000.0 - (state.score_human - state.score_ai)
+    return 0.0
+
+
+# -----------------------------
+# Minimax / Alpha-Beta (depth-limited)
+# Both build Node structure and track stats.
+# -----------------------------
+
+def minimax_decision(root_state: GameState, depth_limit: int) -> Tuple[Move, Node, SearchStats]:
+    stats = SearchStats()
+    root = Node(state=root_state, depth=0)
+
+    def max_value(node: Node, depth: int) -> float:
+        stats.generated_nodes += 1
+
+        if node.state.is_terminal():
+            stats.evaluated_nodes += 1
+            v = terminal_utility(node.state)
+            node.value = v
+            return v
+        if depth == 0:
+            stats.evaluated_nodes += 1
+            v = heuristic(node.state)
+            node.value = v
+            return v
+
+        v = -float("inf")
+        for mv in node.state.legal_moves():
+            child_state = node.state.apply(mv)
+            child = Node(state=child_state, move_from_parent=mv, parent=node, depth=node.depth + 1)
+            node.children.append(child)
+
+            v = max(v, min_value(child, depth - 1))
+        node.value = v
+        return v
+
+    def min_value(node: Node, depth: int) -> float:
+        stats.generated_nodes += 1
+
+        if node.state.is_terminal():
+            stats.evaluated_nodes += 1
+            v = terminal_utility(node.state)
+            node.value = v
+            return v
+        if depth == 0:
+            stats.evaluated_nodes += 1
+            v = heuristic(node.state)
+            node.value = v
+            return v
+
+        v = float("inf")
+        for mv in node.state.legal_moves():
+            child_state = node.state.apply(mv)
+            child = Node(state=child_state, move_from_parent=mv, parent=node, depth=node.depth + 1)
+            node.children.append(child)
+
+            v = min(v, max_value(child, depth - 1))
+        node.value = v
+        return v
+
+    # Decide best move for side-to-move:
+    # If AI to move -> maximize; if HUMAN -> minimize (from AI perspective).
+    best_move = None
+    if root_state.player_to_move == AI:
+        best_val = -float("inf")
+        for mv in root_state.legal_moves():
+            child_state = root_state.apply(mv)
+            child = Node(state=child_state, move_from_parent=mv, parent=root, depth=1)
+            root.children.append(child)
+
+            val = min_value(child, depth_limit - 1)
+            if val > best_val:
+                best_val = val
+                best_move = mv
+        root.value = best_val
+    else:
+        best_val = float("inf")
+        for mv in root_state.legal_moves():
+            child_state = root_state.apply(mv)
+            child = Node(state=child_state, move_from_parent=mv, parent=root, depth=1)
+            root.children.append(child)
+
+            val = max_value(child, depth_limit - 1)
+            if val < best_val:
+                best_val = val
+                best_move = mv
+        root.value = best_val
+
+    if best_move is None:
+        # No moves -> terminal anyway
+        best_move = Move(2)
+
+    return best_move, root, stats
+
+
+def alphabeta_decision(root_state: GameState, depth_limit: int) -> Tuple[Move, Node, SearchStats]:
+    stats = SearchStats()
+    root = Node(state=root_state, depth=0)
+
+    def max_value(node: Node, depth: int, alpha: float, beta: float) -> float:
+        stats.generated_nodes += 1
+
+        if node.state.is_terminal():
+            stats.evaluated_nodes += 1
+            v = terminal_utility(node.state)
+            node.value = v
+            return v
+        if depth == 0:
+            stats.evaluated_nodes += 1
+            v = heuristic(node.state)
+            node.value = v
+            return v
+
+        v = -float("inf")
+        for mv in node.state.legal_moves():
+            child_state = node.state.apply(mv)
+            child = Node(state=child_state, move_from_parent=mv, parent=node, depth=node.depth + 1)
+            node.children.append(child)
+
+            v = max(v, min_value(child, depth - 1, alpha, beta))
+            if v >= beta:
+                node.value = v
+                return v
+            alpha = max(alpha, v)
+        node.value = v
+        return v
+
+    def min_value(node: Node, depth: int, alpha: float, beta: float) -> float:
+        stats.generated_nodes += 1
+
+        if node.state.is_terminal():
+            stats.evaluated_nodes += 1
+            v = terminal_utility(node.state)
+            node.value = v
+            return v
+        if depth == 0:
+            stats.evaluated_nodes += 1
+            v = heuristic(node.state)
+            node.value = v
+            return v
+
+        v = float("inf")
+        for mv in node.state.legal_moves():
+            child_state = node.state.apply(mv)
+            child = Node(state=child_state, move_from_parent=mv, parent=node, depth=node.depth + 1)
+            node.children.append(child)
+
+            v = min(v, max_value(child, depth - 1, alpha, beta))
+            if v <= alpha:
+                node.value = v
+                return v
+            beta = min(beta, v)
+        node.value = v
+        return v
+
+    best_move = None
+    if root_state.player_to_move == AI:
+        best_val = -float("inf")
+        alpha, beta = -float("inf"), float("inf")
+        for mv in root_state.legal_moves():
+            child_state = root_state.apply(mv)
+            child = Node(state=child_state, move_from_parent=mv, parent=root, depth=1)
+            root.children.append(child)
+
+            val = min_value(child, depth_limit - 1, alpha, beta)
+            if val > best_val:
+                best_val = val
+                best_move = mv
+            alpha = max(alpha, best_val)
+        root.value = best_val
+    else:
+        best_val = float("inf")
+        alpha, beta = -float("inf"), float("inf")
+        for mv in root_state.legal_moves():
+            child_state = root_state.apply(mv)
+            child = Node(state=child_state, move_from_parent=mv, parent=root, depth=1)
+            root.children.append(child)
+
+            val = max_value(child, depth_limit - 1, alpha, beta)
+            if val < best_val:
+                best_val = val
+                best_move = mv
+            beta = min(beta, best_val)
+        root.value = best_val
+
+    if best_move is None:
+        best_move = Move(2)  # Fallback (shouldn't happen in normal play)
+
+    return best_move, root, stats
+
+
+# -----------------------------
+# Random start numbers (multiples of 6)
+# -----------------------------
+
+def generate_start_numbers(k: int = 5, low: int = 10000, high: int = 20000, seed: Optional[int] = None) -> List[int]:
+    if seed is not None:
+        random.seed(seed)
+
+    nums = set()
+    while len(nums) < k:
+        x = random.randint(low, high)
+        x -= (x % 6)  # snap down to multiple of 6
+        if x < low:
+            continue
+        nums.add(x)
+    return sorted(nums)
+
+
+# -----------------------------
+# Experiments (10 games per algorithm)
+# - "human" is simulated as random legal move.
+# - AI uses selected algorithm.
+# - Collect: wins, generated/evaluated nodes, avg AI move time.
+# -----------------------------
+
+def play_game_simulated(start_n: int, algo: str, depth_limit: int, seed: int) -> dict:
+    rnd = random.Random(seed)
+    state = GameState(start_n, 0, 0, HUMAN)  # simulated human starts by default in experiments
+
+    total_ai_time = 0.0
+    ai_moves = 0
+    total_generated = 0
+    total_evaluated = 0
+
+    while not state.is_terminal():
+        moves = state.legal_moves()
+        if not moves:
+            break
+
+        if state.player_to_move == HUMAN:
+            mv = rnd.choice(moves)
+            state = state.apply(mv)
+        else:
+            t0 = time.perf_counter()
+            if algo == "minimax":
+                mv, _, st = minimax_decision(state, depth_limit)
+            else:
+                mv, _, st = alphabeta_decision(state, depth_limit)
+            dt = time.perf_counter() - t0
+
+            total_ai_time += dt
+            ai_moves += 1
+            total_generated += st.generated_nodes
+            total_evaluated += st.evaluated_nodes
+
+            state = state.apply(mv)
+
+    winner = state.winner()
+    return {
+        "start_n": start_n,
+        "algo": algo,
+        "depth": depth_limit,
+        "winner": "draw" if winner is None else ("human" if winner == HUMAN else "ai"),
+        "final_n": state.n,
+        "human_score": state.score_human,
+        "ai_score": state.score_ai,
+        "ai_move_time_avg": (total_ai_time / ai_moves) if ai_moves else 0.0,
+        "generated_nodes_total": total_generated,
+        "evaluated_nodes_total": total_evaluated,
+        "ai_moves": ai_moves,
+    }
+
+
+def run_experiments(depth_limit: int = 8, games_per_algo: int = 10) -> List[dict]:
+    results = []
+    base_seed = 12345
+    # Use fresh start numbers for each game, but deterministic for report
+    starts = [generate_start_numbers(seed=base_seed + i)[0] for i in range(games_per_algo)]
+
+    for algo in ("minimax", "alphabeta"):
+        for i in range(games_per_algo):
+            res = play_game_simulated(
+                start_n=starts[i],
+                algo=algo,
+                depth_limit=depth_limit,
+                seed=base_seed + 1000 + i
+            )
+            results.append(res)
+    return results
+
+
+# -----------------------------
+# GUI (Tkinter)
+# -----------------------------
+
+class GameApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Dalīšanas spēle: Minimax / Alpha-Beta")
+        self.geometry("760x480")
+
+        self.start_numbers = generate_start_numbers()
+        self.selected_start = tk.IntVar(value=self.start_numbers[0])
+        self.first_player = tk.StringVar(value="human")  # or "ai"
+        self.algorithm = tk.StringVar(value="alphabeta")  # or "minimax"
+        self.depth_limit = tk.IntVar(value=8)
+
+        self.state: Optional[GameState] = None
+        self.last_tree_root: Optional[Node] = None
+        self.last_stats: Optional[SearchStats] = None
+
+        self._build_ui()
+        self._refresh_start_numbers_ui()
+        self._set_status("Izvēlies sākuma skaitli un iestatījumus, tad spied 'Sākt'.")
+
+    def _build_ui(self):
+        top = ttk.Frame(self, padding=10)
+        top.pack(side=tk.TOP, fill=tk.X)
+
+        ttk.Label(top, text="Sākuma skaitļi (dalās ar 2 un 3):").grid(row=0, column=0, sticky="w")
+
+        self.numbers_frame = ttk.Frame(top)
+        self.numbers_frame.grid(row=1, column=0, sticky="w", pady=(6, 10))
+
+        controls = ttk.Frame(top)
+        controls.grid(row=0, column=1, rowspan=2, sticky="ne", padx=(20, 0))
+
+        ttk.Label(controls, text="Kas sāk:").grid(row=0, column=0, sticky="w")
+        ttk.Radiobutton(controls, text="Cilvēks", variable=self.first_player, value="human").grid(row=1, column=0, sticky="w")
+        ttk.Radiobutton(controls, text="Dators", variable=self.first_player, value="ai").grid(row=2, column=0, sticky="w")
+
+        ttk.Label(controls, text="Algoritms:").grid(row=3, column=0, sticky="w", pady=(10, 0))
+        ttk.Radiobutton(controls, text="Minimax", variable=self.algorithm, value="minimax").grid(row=4, column=0, sticky="w")
+        ttk.Radiobutton(controls, text="Alpha–Beta", variable=self.algorithm, value="alphabeta").grid(row=5, column=0, sticky="w")
+
+        ttk.Label(controls, text="Dziļuma limits (n):").grid(row=6, column=0, sticky="w", pady=(10, 0))
+        ttk.Spinbox(controls, from_=1, to=30, textvariable=self.depth_limit, width=6).grid(row=7, column=0, sticky="w")
+
+        btns = ttk.Frame(controls)
+        btns.grid(row=8, column=0, sticky="w", pady=(12, 0))
+        ttk.Button(btns, text="Jauni skaitļi", command=self._regen_numbers).pack(side=tk.LEFT)
+        ttk.Button(btns, text="Sākt", command=self._start_game).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(btns, text="Eksperimenti (10+10)", command=self._run_experiments_ui).pack(side=tk.LEFT, padx=(8, 0))
+
+        mid = ttk.Frame(self, padding=10)
+        mid.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        left = ttk.LabelFrame(mid, text="Spēles stāvoklis", padding=10)
+        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.lbl_n = ttk.Label(left, text="n = -", font=("Segoe UI", 18))
+        self.lbl_n.pack(anchor="w")
+
+        self.lbl_scores = ttk.Label(left, text="Cilvēks: 0 | Dators: 0", font=("Segoe UI", 12))
+        self.lbl_scores.pack(anchor="w", pady=(8, 0))
+
+        self.lbl_turn = ttk.Label(left, text="Gājiens: -", font=("Segoe UI", 12))
+        self.lbl_turn.pack(anchor="w", pady=(8, 0))
+
+        move_frame = ttk.Frame(left)
+        move_frame.pack(anchor="w", pady=(16, 0))
+
+        self.btn_div2 = ttk.Button(move_frame, text="Dalīt ar 2", command=lambda: self._human_move(2))
+        self.btn_div3 = ttk.Button(move_frame, text="Dalīt ar 3", command=lambda: self._human_move(3))
+        self.btn_div2.pack(side=tk.LEFT)
+        self.btn_div3.pack(side=tk.LEFT, padx=(10, 0))
+
+        right = ttk.LabelFrame(mid, text="AI informācija", padding=10)
+        right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(10, 0))
+
+        self.txt_ai = tk.Text(right, height=14, wrap="word")
+        self.txt_ai.pack(fill=tk.BOTH, expand=True)
+
+        bottom = ttk.Frame(self, padding=10)
+        bottom.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.lbl_status = ttk.Label(bottom, text="", foreground="#444")
+        self.lbl_status.pack(side=tk.LEFT)
+
+    def _refresh_start_numbers_ui(self):
+        for w in self.numbers_frame.winfo_children():
+            w.destroy()
+        for x in self.start_numbers:
+            ttk.Radiobutton(self.numbers_frame, text=str(x), variable=self.selected_start, value=x).pack(side=tk.LEFT, padx=6)
+
+    def _regen_numbers(self):
+        self.start_numbers = generate_start_numbers()
+        self.selected_start.set(self.start_numbers[0])
+        self._refresh_start_numbers_ui()
+        self._set_status("Saģenerēti jauni sākuma skaitļi.")
+
+    def _start_game(self):
+        n0 = int(self.selected_start.get())
+        starter = HUMAN if self.first_player.get() == "human" else AI
+        self.state = GameState(n0, 0, 0, starter)
+        self.last_tree_root = None
+        self.last_stats = None
+        self._update_ui_from_state()
+        self._log_ai("Jauna spēle sākta.\n")
+
+        if self.state.player_to_move == AI:
+            self.after(100, self._ai_move)
+
+    def _update_ui_from_state(self):
+        if not self.state:
+            return
+        self.lbl_n.config(text=f"n = {self.state.n}")
+        self.lbl_scores.config(text=f"Cilvēks: {self.state.score_human} | Dators: {self.state.score_ai}")
+        who = "Cilvēks" if self.state.player_to_move == HUMAN else "Dators"
+        self.lbl_turn.config(text=f"Gājiens: {who}")
+
+        legal = {mv.divisor for mv in self.state.legal_moves()}
+        self.btn_div2.config(state=("normal" if (2 in legal and self.state.player_to_move == HUMAN and not self.state.is_terminal()) else "disabled"))
+        self.btn_div3.config(state=("normal" if (3 in legal and self.state.player_to_move == HUMAN and not self.state.is_terminal()) else "disabled"))
+
+        if self.state.is_terminal():
+            self.btn_div2.config(state="disabled")
+            self.btn_div3.config(state="disabled")
+            self._announce_result()
+
+    def _announce_result(self):
+        if not self.state:
+            return
+        w = self.state.winner()
+        if w is None:
+            msg = f"Spēle beigusies: NEIZŠĶIRTS.\nRezultāts: {self.state.score_human}:{self.state.score_ai}"
+        elif w == HUMAN:
+            msg = f"Spēle beigusies: UZVAR CILVĒKS.\nRezultāts: {self.state.score_human}:{self.state.score_ai}"
+        else:
+            msg = f"Spēle beigusies: UZVAR DATORS.\nRezultāts: {self.state.score_human}:{self.state.score_ai}"
+        self._set_status(msg)
+        messagebox.showinfo("Rezultāts", msg)
+
+    def _human_move(self, divisor: int):
+        if not self.state or self.state.player_to_move != HUMAN or self.state.is_terminal():
+            return
+        mv = Move(divisor)
+        if self.state.n % divisor != 0:
+            return
+        self.state = self.state.apply(mv)
+        self._update_ui_from_state()
+        if self.state and not self.state.is_terminal() and self.state.player_to_move == AI:
+            self.after(100, self._ai_move)
+
+    def _skip_turn_if_no_moves(self):
+        """Skip current player's turn if they have no legal moves."""
+        if not self.state or self.state.is_terminal():
+            return
+        if not self.state.can_move():
+            # Current player has no moves, pass to other player
+            self.state = GameState(self.state.n, self.state.score_human, self.state.score_ai, 
+                                   AI if self.state.player_to_move == HUMAN else HUMAN)
+            self._update_ui_from_state()
+            if self.state and not self.state.is_terminal() and self.state.player_to_move == AI:
+                self.after(100, self._ai_move)
+
+    def _ai_move(self):
+        if not self.state or self.state.player_to_move != AI or self.state.is_terminal():
+            return
+        
+        # Skip AI turn if no moves available
+        if not self.state.can_move():
+            self._skip_turn_if_no_moves()
+            return
+        
+        algo = self.algorithm.get()
+        depth = int(self.depth_limit.get())
+
+        t0 = time.perf_counter()
+        if algo == "minimax":
+            mv, root, stats = minimax_decision(self.state, depth)
+        else:
+            mv, root, stats = alphabeta_decision(self.state, depth)
+        dt = time.perf_counter() - t0
+
+        self.last_tree_root = root
+        self.last_stats = stats
+
+        self._log_ai(
+            f"AI gājiens: dalīt ar {mv.divisor}\n"
+            f"Algoritms: {algo}, dziļums: {depth}\n"
+            f"Laiks: {dt:.4f}s\n"
+            f"Ģenerētās virsotnes: {stats.generated_nodes}\n"
+            f"Novērtētās virsotnes: {stats.evaluated_nodes}\n"
+            f"Saknes vērtība: {root.value}\n"
+            f"{'-'*40}\n"
+        )
+
+        self.state = self.state.apply(mv)
+        self._update_ui_from_state()
+
+    def _log_ai(self, text: str):
+        self.txt_ai.insert("end", text)
+        self.txt_ai.see("end")
+
+    def _set_status(self, text: str):
+        self.lbl_status.config(text=text)
+
+    def _run_experiments_ui(self):
+        depth = int(self.depth_limit.get())
+        results = run_experiments(depth_limit=depth, games_per_algo=10)
+
+        # Summarize
+        summary = {"minimax": {"ai": 0, "human": 0, "draw": 0, "t": 0.0, "k": 0},
+                   "alphabeta": {"ai": 0, "human": 0, "draw": 0, "t": 0.0, "k": 0}}
+
+        for r in results:
+            s = summary[r["algo"]]
+            s[r["winner"]] += 1
+            s["t"] += r["ai_move_time_avg"]
+            s["k"] += 1
+
+        msg = (
+            f"Eksperimenti pabeigti (dziļums {depth}).\n\n"
+            f"Minimax: AI uzvaras={summary['minimax']['ai']}, Cilvēks={summary['minimax']['human']}, Neizšķirti={summary['minimax']['draw']}, "
+            f"AI vid. gājiena laiks={summary['minimax']['t']/summary['minimax']['k']:.4f}s\n"
+            f"Alpha–Beta: AI uzvaras={summary['alphabeta']['ai']}, Cilvēks={summary['alphabeta']['human']}, Neizšķirti={summary['alphabeta']['draw']}, "
+            f"AI vid. gājiena laiks={summary['alphabeta']['t']/summary['alphabeta']['k']:.4f}s\n\n"
+            f"(Cilvēks eksperimentos ir simulēts ar random legālu gājienu.)"
+        )
+        self._log_ai("\n" + msg + "\n" + "="*40 + "\n")
+        messagebox.showinfo("Eksperimentu kopsavilkums", msg)
+
+
+def main():
+    app = GameApp()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
