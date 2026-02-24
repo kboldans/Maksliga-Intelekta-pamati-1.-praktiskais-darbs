@@ -1,0 +1,20 @@
+# TO DO list for all tasks
+## After completion please remove bold lettering from each task
+
+### **1. salabot logiku, tiesi ar skaitlu dalisanu (nelaut veikt gajienu, ja skaitlis nedalas ar velamo 2 vai 3): AIZLIEGT ILLEGAL MOVES**
+
+### **2. Dot pazinojumus par illegal moves**
+
+### **3. AIZLIEGT!**
+
+### **4. Saprast kas ar punktu skaitisanu notiek un kapec ata neiet lidz galam, visdrizak parpasts ir sis noteikums: Spēle beidzas, kā tikko ir iegūts skaitlis, kas ir mazāks vai vienāds ar 10**
+
+### **5. Salabot to ui, jo es nez, kas tur visp notiek - parskatami gajieni, kas jadara un janodrosina, ka random podzinas nevar spiest**
+
+### **6. Vajag fact checkot Minimax un Alphabeta algoritmus vai tie tiešām ir precīzi un attiecīgi, lai nav kkads ai slop jāazstāv aka iepazit pasus algoritmus**
+
+### **7. 10 ekesperimenti mums javeic uzskaitei, cilveka gajieni ari tiek simuleti? noskaidrot un attiecigi ieviest korektu logiku sim**
+
+### **8. Debug code**
+
+### 9. Ieviest kkadu version control
