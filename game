@@ -14,6 +14,8 @@ AI = 1
 class Move:
     divisor: int  # 2 or 3
 
+    # 100 grami kulturas
+
 @dataclass(frozen=True)
 class GameState:
     n: int
@@ -174,7 +176,7 @@ def minimax_decision(root_state: GameState, depth_limit: int) -> Tuple[Move, Nod
         if depth == 0:
             stats.evaluated_nodes += 1
             v = heuristic(node.state)
-            node.value = v
+            node.value = v  
             return v
 
         v = float("inf")
@@ -357,7 +359,7 @@ def play_game_simulated(start_n: int, algo: str, depth_limit: int, seed: int) ->
         if not moves:
             break
 
-        if state.player_to_move == HUMAN:
+        if state.player_to_move == HUMAN:   
             mv = rnd.choice(moves)
             state = state.apply(mv)
         else:
