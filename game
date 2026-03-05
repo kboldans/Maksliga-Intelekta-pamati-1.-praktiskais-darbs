@@ -30,12 +30,18 @@ class GameState:
         if self.n % 3 == 0:
             moves.append(Move(3))
         return moves
-
+    # def is_terminal(self):
     def is_terminal(self) -> bool:
-        return self.score_human >= 10 or self.score_ai >= 10
+        return self.n <= 10 or not self.legal_moves()
+
+    def terminal_reason(self) -> Optional[str]:
+        if self.n <= 10:
+            return "number_reached"
+        if not self.legal_moves():
+            return "no_moves"
+        return None
     
     def can_move(self) -> bool:
-        """Check if current player has any legal moves."""
         return len(self.legal_moves()) > 0
 
     def apply(self, move: Move) -> "GameState":
@@ -544,6 +550,23 @@ class GameApp(tk.Tk):
         if not self.state:
             return
         w = self.state.winner()
+        reason = self.state.terminal_reason()
+        if reason == "number_reached":
+            prefix = f"Game over: reached number {self.state.n} (<= 10)."
+        else:
+            prefix = f"Game over: no legal moves remain at {self.state.n}."
+        if w is None:
+            msg = f"{prefix}\nDraw.\nScore: {self.state.score_human}:{self.state.score_ai}"
+        elif w == HUMAN:
+            msg = f"{prefix}\nHuman wins.\nScore: {self.state.score_human}:{self.state.score_ai}"
+        else:
+            msg = f"{prefix}\nComputer wins.\nScore: {self.state.score_human}:{self.state.score_ai}"
+        self._set_status(msg)
+        messagebox.showinfo("Result", msg)
+        return
+        if not self.state:
+            return
+        w = self.state.winner()
         if w is None:
             msg = f"Spēle beigusies: NEIZŠĶIRTS.\nRezultāts: {self.state.score_human}:{self.state.score_ai}"
         elif w == HUMAN:
@@ -554,6 +577,23 @@ class GameApp(tk.Tk):
         messagebox.showinfo("Rezultāts", msg)
 
     def _human_move(self, divisor: int):
+        if not self.state:
+            return
+        if self.state.player_to_move != HUMAN:
+            self._set_status("It is currently the computer's turn.")
+            return
+        if self.state.is_terminal():
+            self._announce_result()
+            return
+        if self.state.n % divisor != 0:
+            self._set_status(f"Illegal move: {self.state.n} is not divisible by {divisor}.")
+            messagebox.showwarning("Illegal move", f"{self.state.n} is not divisible by {divisor}.")
+            return
+        self.state = self.state.apply(Move(divisor))
+        self._update_ui_from_state()
+        if self.state and not self.state.is_terminal() and self.state.player_to_move == AI:
+            self.after(100, self._ai_move)
+        return
         if not self.state or self.state.player_to_move != HUMAN or self.state.is_terminal():
             return
         mv = Move(divisor)
@@ -565,6 +605,12 @@ class GameApp(tk.Tk):
             self.after(100, self._ai_move)
 
     def _skip_turn_if_no_moves(self):
+        if not self.state or self.state.is_terminal():
+            return
+        if not self.state.can_move():
+            self._set_status(f"No legal moves remain at {self.state.n}.")
+            self._update_ui_from_state()
+        return
         """Skip current player's turn if they have no legal moves."""
         if not self.state or self.state.is_terminal():
             return
@@ -577,6 +623,12 @@ class GameApp(tk.Tk):
                 self.after(100, self._ai_move)
 
     def _ai_move(self):
+        if not self.state or self.state.player_to_move != AI or self.state.is_terminal():
+            return
+        if not self.state.can_move():
+            self._log_ai(f"AI cannot move at {self.state.n}: no legal moves remain.\n")
+            self._skip_turn_if_no_moves()
+            return
         if not self.state or self.state.player_to_move != AI or self.state.is_terminal():
             return
         
